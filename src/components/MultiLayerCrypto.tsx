@@ -8,7 +8,7 @@ import { Progress } from "@/components/ui/progress";
 import { AlertCircle, Lock, Unlock, Shield, Key, Image, Download, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { AESCrypto, RSACrypto, Steganography, validateClickSequence } from "@/lib/crypto";
-import { ClickSequenceGrid } from "./ClickSequenceGrid";
+import { ImageClickSequenceOverlay } from "./ImageClickSequenceOverlay";
 import { StepIndicator } from "./StepIndicator";
 
 export const MultiLayerCrypto = () => {
@@ -26,6 +26,7 @@ export const MultiLayerCrypto = () => {
   
   const fileInputRef = useRef<HTMLInputElement>(null);
   const resultImageRef = useRef<HTMLAnchorElement>(null);
+  const pemInputRef = useRef<HTMLInputElement>(null);
 
   const encryptionSteps = ["AES-256", "RSA-2048", "Steganography"];
   const decryptionSteps = ["Steganography", "RSA-2048", "AES-256"];
@@ -35,6 +36,25 @@ export const MultiLayerCrypto = () => {
     setProgress(0);
     setResult(null);
     setResultImage(null);
+  };
+
+  // Normalize pasted/uploaded PEM keys to avoid common formatting issues
+  const sanitizePem = (key: string): string => {
+    let s = (key || "").trim();
+    // remove surrounding quotes/backticks
+    if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'")) || (s.startsWith("`") && s.endsWith("`"))) {
+      s = s.slice(1, -1);
+    }
+    s = s.replace(/\r/g, "");
+
+    // If header/footer are missing, assume content is base64 and wrap it
+    if (!/BEGIN [A-Z ]+PRIVATE KEY/.test(s)) {
+      const compact = s.replace(/\s+/g, "");
+      if (compact.length > 0) {
+        s = `-----BEGIN PRIVATE KEY-----\n${compact}\n-----END PRIVATE KEY-----`;
+      }
+    }
+    return s;
   };
 
   const handleEncryption = async () => {
@@ -109,7 +129,7 @@ export const MultiLayerCrypto = () => {
       setCurrentStep(2);
       setProgress(50);
       await new Promise(resolve => setTimeout(resolve, 800));
-      const rsaDecrypted = RSACrypto.decrypt(extractedRsaData, rsaPrivateKey);
+      const rsaDecrypted = RSACrypto.decrypt(extractedRsaData, sanitizePem(rsaPrivateKey));
       toast.success("RSA-2048 decryption completed");
       
       // Step 3: AES-256 Decryption
@@ -234,6 +254,24 @@ export const MultiLayerCrypto = () => {
                       onChange={(e) => setRsaPrivateKey(e.target.value)}
                       className="min-h-[120px] font-mono text-xs"
                     />
+                    <div className="flex gap-2">
+                      <Button variant="outline" type="button" onClick={() => pemInputRef.current?.click()}>
+                        Upload .pem
+                      </Button>
+                      <input
+                        ref={pemInputRef}
+                        type="file"
+                        accept=".pem,.key,.txt"
+                        className="hidden"
+                        onChange={async (e) => {
+                          const file = e.target.files?.[0];
+                          if (file) {
+                            const text = await file.text();
+                            setRsaPrivateKey(text);
+                          }
+                        }}
+                      />
+                    </div>
                   </div>
                 )}
 
@@ -272,13 +310,19 @@ export const MultiLayerCrypto = () => {
 
                 <div className="space-y-2">
                   <Label>4-Click Security Sequence</Label>
-                  <ClickSequenceGrid
-                    sequence={clickSequence}
-                    onSequenceChange={setClickSequence}
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    Click 4 different numbers in order (1-9)
-                  </p>
+                  {selectedImage ? (
+                    <>
+                      <ImageClickSequenceOverlay
+                        imageFile={selectedImage}
+                        sequence={clickSequence}
+                        onSequenceChange={setClickSequence}
+                      />
+                    </>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">
+                      Select an image first to perform the 4-click sequence on it.
+                    </p>
+                  )}
                 </div>
               </CardContent>
             </Card>
@@ -314,6 +358,23 @@ export const MultiLayerCrypto = () => {
                     <p className="text-xs text-muted-foreground mt-2">
                       You'll need this key for decryption. Keep it safe!
                     </p>
+                    <div className="mt-2">
+                      <Button
+                        variant="outline"
+                        type="button"
+                        onClick={() => {
+                          const blob = new Blob([rsaPrivateKey], { type: 'application/x-pem-file' });
+                          const url = URL.createObjectURL(blob);
+                          const a = document.createElement('a');
+                          a.href = url;
+                          a.download = 'private_key.pem';
+                          a.click();
+                          URL.revokeObjectURL(url);
+                        }}
+                      >
+                        Download .pem
+                      </Button>
+                    </div>
                   </div>
                 )}
 
@@ -344,7 +405,11 @@ export const MultiLayerCrypto = () => {
 
                 <Button
                   onClick={mode === 'encrypt' ? handleEncryption : handleDecryption}
-                  disabled={processing}
+                  disabled={
+                    processing || (mode === 'encrypt'
+                      ? (!inputText || !password || !selectedImage || !validateClickSequence(clickSequence))
+                      : (!selectedImage || !password || !rsaPrivateKey || !validateClickSequence(clickSequence)))
+                  }
                   className="w-full gradient-cyber text-white disabled:opacity-50"
                   size="lg"
                 >
